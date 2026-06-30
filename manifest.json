@@ -1,0 +1,12 @@
+{
+  "name": "Gestión Contractual · Parche Zipa",
+  "short_name": "Parche Zipa",
+  "description": "Sistema Inteligente de Gestión Contractual e Informes Automáticos con IA",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0E0A1F",
+  "theme_color": "#0E0A1F",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
