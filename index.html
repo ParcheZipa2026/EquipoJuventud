@@ -521,6 +521,7 @@ async function loadFromBackend(){
     if(!r || !Array.isArray(r.contractors) || r.contractors.length===0) return false;
     const obls = Array.isArray(r.obligaciones) ? r.obligaciones : [];
     const acts = Array.isArray(r.actividades)  ? r.actividades  : [];
+    const novs = Array.isArray(r.novedades)    ? r.novedades    : [];
     const d10 = v => { if(v==null) return ""; const s=String(v); return (s.length>=10 && s[4]==="-") ? s.slice(0,10) : s; };
     const truthy = v => v===true||v===1||v==="true"||v==="TRUE"||v==="VERDADERO"||v==="Sí"||v==="si"||v==="1";
     DB.contractors = r.contractors.filter(row=>row && (row.id!==undefined && row.id!=="")).map(row=>{
@@ -529,6 +530,8 @@ async function loadFromBackend(){
         .map((o,i)=>({ id:String(o.id||uid()), orden:+o.orden||(i+1), texto:o.texto||"",
                        activa:(o.activa===""||o.activa==null) ? true : truthy(o.activa) }));
       const vS=+row.vSalud||0, vP=+row.vPension||0, vA=+row.vArl||0;
+      const misNov = novs.filter(n=>String(n.contractorId)===String(row.id))
+        .map(n=>({ tipo:n.tipo||"", fecha:(n.fecha!=null && String(n.fecha).length>=10 && String(n.fecha)[4]==="-")?String(n.fecha).slice(0,10):String(n.fecha||""), detalle:n.detalle||"" }));
       return {
         id:String(row.id), doc:String(row.doc==null?"":row.doc).trim(), nombre:row.nombre||"", contrato:row.contrato||"",
         dependencia:row.dependencia||"", supervisor:row.supervisor||"", objeto:row.objeto||"",
@@ -538,7 +541,7 @@ async function loadFromBackend(){
         eps:row.eps||"", pension:row.pension||"", arl:row.arl||"",
         vSalud:vS, vPension:vP, vArl:vA, vAportes:vS+vP+vA,
         estado:row.estado||"activo", obs:row.obs||"",
-        obligaciones: lista.length ? lista : mkObl(), novedades:[], email:row.email||""
+        obligaciones: lista.length ? lista : mkObl(), novedades:misNov, email:row.email||""
       };
     });
     DB.activities = acts.filter(a=>a && a.id!==undefined && a.id!=="").map(a=>({
@@ -550,6 +553,11 @@ async function loadFromBackend(){
     return true;
   }catch(e){ console.warn("No se pudo cargar del backend; se usan datos locales.", e); return false; }
 }
+
+/* Guardar en el Sheet las obligaciones / novedades de un contratista (solo MODO VIVO). */
+function persistObl(c){ if(LIVE() && c){ apiCall("guardar_obligaciones",{contractorId:c.id, obligaciones:c.obligaciones}).catch(()=>{}); } }
+function persistNov(c){ if(LIVE() && c){ apiCall("guardar_novedades",{contractorId:c.id, novedades:c.novedades}).catch(()=>{}); } }
+function guardarContratistaLive(c){ if(LIVE() && c){ apiCall("guardar_contratista",{id:c.id, data:c}).catch(()=>{}); } }
 
 /* ====================== CÁLCULO DE PERÍODOS DE CORTE ====================== */
 /* Genera el período de corte vigente o por índice. corte={ini,fin} */
@@ -1124,9 +1132,13 @@ function guardarContratista(id){
     vSalud:+g("vSalud")||0,vPension:+g("vPension")||0,vArl:+g("vArl")||0,obs:g("obs") };
   data.vAportes=data.vSalud+data.vPension+data.vArl;
   if(!data.nombre||!data.contrato) return toast("Nombre y contrato son obligatorios","edit");
-  if(id){ Object.assign(DB.contractors.find(c=>c.id===id),data); toast("Contrato actualizado ✓"); }
-  else { DB.contractors.push({id:uid(),...data,obligaciones:mkObl(),novedades:[],email:""}); toast("Contratista creado ✓"); }
-  if(LIVE()){ apiCall("guardar_contratista",{id,data}).catch(()=>{}); }
+  let target;
+  if(id){ target=DB.contractors.find(c=>c.id===id); Object.assign(target,data); toast("Contrato actualizado ✓"); }
+  else { const nid=uid(); data.id=nid; target={id:nid,...data,obligaciones:mkObl(),novedades:[],email:""}; DB.contractors.push(target); toast("Contratista creado ✓"); }
+  if(LIVE()){
+    apiCall("guardar_contratista",{id:id||data.id, data:{...data, id:id||data.id}}).catch(()=>{});
+    if(!id) persistObl(target);  // guardar las obligaciones base del contratista nuevo
+  }
   closeModal(); go(CURRENT);
 }
 function eliminarContratista(id){
@@ -1167,17 +1179,17 @@ function bindDrag(c){
       const arr=c.obligaciones.sort((a,b)=>a.orden-b.orden);
       const from=arr.findIndex(o=>o.id===DRAG), to=arr.findIndex(o=>o.id===target);
       const [m]=arr.splice(from,1); arr.splice(to,0,m); arr.forEach((o,i)=>o.orden=i+1);
-      $("#oblList").innerHTML=oblListHTML(c); bindDrag(c); toast("Orden actualizado");
+      $("#oblList").innerHTML=oblListHTML(c); bindDrag(c); persistObl(c); toast("Orden actualizado");
     };
   });
 }
 function addObl(id){ const c=DB.contractors.find(x=>x.id===id); const t=$("#newObl").value.trim(); if(!t)return;
   c.obligaciones.push({id:uid(),orden:c.obligaciones.length+1,texto:t,activa:true});
-  $("#oblList").innerHTML=oblListHTML(c); bindDrag(c); $("#newObl").value=""; toast("Obligación creada"); }
-function toggleObl(cid,oid){ const c=DB.contractors.find(x=>x.id===cid); const o=c.obligaciones.find(x=>x.id===oid); o.activa=!o.activa; $("#oblList").innerHTML=oblListHTML(c); bindDrag(c); }
-function delObl(cid,oid){ const c=DB.contractors.find(x=>x.id===cid); c.obligaciones=c.obligaciones.filter(o=>o.id!==oid); $("#oblList").innerHTML=oblListHTML(c); bindDrag(c); toast("Obligación eliminada"); }
+  $("#oblList").innerHTML=oblListHTML(c); bindDrag(c); $("#newObl").value=""; persistObl(c); toast("Obligación creada"); }
+function toggleObl(cid,oid){ const c=DB.contractors.find(x=>x.id===cid); const o=c.obligaciones.find(x=>x.id===oid); o.activa=!o.activa; $("#oblList").innerHTML=oblListHTML(c); bindDrag(c); persistObl(c); }
+function delObl(cid,oid){ const c=DB.contractors.find(x=>x.id===cid); c.obligaciones=c.obligaciones.filter(o=>o.id!==oid); c.obligaciones.forEach((o,i)=>o.orden=i+1); $("#oblList").innerHTML=oblListHTML(c); bindDrag(c); persistObl(c); toast("Obligación eliminada"); }
 function editObl(cid,oid){ const c=DB.contractors.find(x=>x.id===cid); const o=c.obligaciones.find(x=>x.id===oid);
-  const t=prompt("Editar obligación:",o.texto); if(t){o.texto=t;$("#oblList").innerHTML=oblListHTML(c);bindDrag(c);} }
+  const t=prompt("Editar obligación:",o.texto); if(t){o.texto=t;$("#oblList").innerHTML=oblListHTML(c);bindDrag(c);persistObl(c);} }
 
 /* ----- Novedades: adiciones, prórrogas, suspensiones, reinicios, liquidaciones ----- */
 function modalNovedad(id){
@@ -1197,7 +1209,7 @@ const novListHTML=c=> c.novedades.length? c.novedades.map(n=>`<div class="alert"
 function addNovedad(id){ const c=DB.contractors.find(x=>x.id===id);
   c.novedades.push({tipo:$("#nTipo").value,fecha:$("#nFecha").value,detalle:$("#nDetalle").value});
   if($("#nTipo").value==="Suspensión")c.estado="suspendido"; if($("#nTipo").value==="Reinicio")c.estado="activo"; if($("#nTipo").value==="Liquidación")c.estado="liquidado";
-  $("#novList").innerHTML=novListHTML(c); toast("Novedad registrada ✓"); }
+  $("#novList").innerHTML=novListHTML(c); persistNov(c); if(LIVE()) guardarContratistaLive(c); toast("Novedad registrada ✓"); }
 
 /* ----- Detalle de contrato (reutilizable) ----- */
 function contractoDetalleHTML(c,readonly){
