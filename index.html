@@ -267,7 +267,6 @@ textarea.input{resize:vertical;min-height:96px;line-height:1.55}
     <div class="role-pills" id="rolePills">
       <div class="role-pill on" data-role="supervisor">Supervisor</div>
       <div class="role-pill" data-role="contratista">Contratista</div>
-      <div class="role-pill" data-role="admin">Admin</div>
     </div>
     <div class="field">
       <label>Usuario</label>
@@ -277,7 +276,7 @@ textarea.input{resize:vertical;min-height:96px;line-height:1.55}
       <label>Contraseña</label>
       <input class="input" id="lPass" type="password" placeholder="••••••••" autocomplete="current-password">
     </div>
-    <button class="btn btn-lila mt-s" onclick="doLogin()"><span class="material-symbols-rounded">login</span> Entrar</button>
+    <button id="btnEntrar" class="btn btn-lila mt-s" onclick="doLogin()"><span class="material-symbols-rounded">login</span> Entrar</button>
   </div>
 </div>
 
@@ -513,6 +512,45 @@ async function apiCall(action, payload={}){
 }
 const LIVE = ()=> !!CONFIG.API_URL;
 
+/* Cargar los datos compartidos desde el backend (Google Sheets) en MODO VIVO.
+   Esto hace que los cambios del supervisor (p.ej. documentos) lleguen a todos los dispositivos. */
+async function loadFromBackend(){
+  if(!LIVE()) return false;
+  try{
+    const r = await apiCall("listar");
+    if(!r || !Array.isArray(r.contractors) || r.contractors.length===0) return false;
+    const obls = Array.isArray(r.obligaciones) ? r.obligaciones : [];
+    const acts = Array.isArray(r.actividades)  ? r.actividades  : [];
+    const d10 = v => { if(v==null) return ""; const s=String(v); return (s.length>=10 && s[4]==="-") ? s.slice(0,10) : s; };
+    const truthy = v => v===true||v===1||v==="true"||v==="TRUE"||v==="VERDADERO"||v==="Sí"||v==="si"||v==="1";
+    DB.contractors = r.contractors.filter(row=>row && (row.id!==undefined && row.id!=="")).map(row=>{
+      const lista = obls.filter(o=>String(o.contractorId)===String(row.id))
+        .sort((a,b)=>(+a.orden||0)-(+b.orden||0))
+        .map((o,i)=>({ id:String(o.id||uid()), orden:+o.orden||(i+1), texto:o.texto||"",
+                       activa:(o.activa===""||o.activa==null) ? true : truthy(o.activa) }));
+      const vS=+row.vSalud||0, vP=+row.vPension||0, vA=+row.vArl||0;
+      return {
+        id:String(row.id), doc:String(row.doc==null?"":row.doc).trim(), nombre:row.nombre||"", contrato:row.contrato||"",
+        dependencia:row.dependencia||"", supervisor:row.supervisor||"", objeto:row.objeto||"",
+        plazoIni:row.plazoIni||"", plazoProrroga:row.plazoProrroga||"", plazoTotal:row.plazoTotal||"",
+        valorIni:+row.valorIni||0, valorAdic:+row.valorAdic||0, fechaIni:d10(row.fechaIni), fechaFin:d10(row.fechaFin),
+        corte:{ ini:+row.corteIni||21, fin:+row.corteFin||20 }, fechaInforme:d10(row.fechaInforme),
+        eps:row.eps||"", pension:row.pension||"", arl:row.arl||"",
+        vSalud:vS, vPension:vP, vArl:vA, vAportes:vS+vP+vA,
+        estado:row.estado||"activo", obs:row.obs||"",
+        obligaciones: lista.length ? lista : mkObl(), novedades:[], email:row.email||""
+      };
+    });
+    DB.activities = acts.filter(a=>a && a.id!==undefined && a.id!=="").map(a=>({
+      id:String(a.id), contractorId:String(a.contractorId), oblId:String(a.oblId||""),
+      fecha:d10(a.fecha), lugar:a.lugar||"", descRaw:a.descRaw||"", descAI:a.descAI||"",
+      resultados:a.resultados||"", impacto:a.impacto||"",
+      fotos:[a.foto1,a.foto2].filter(x=>x && String(x).trim())
+    }));
+    return true;
+  }catch(e){ console.warn("No se pudo cargar del backend; se usan datos locales.", e); return false; }
+}
+
 /* ====================== CÁLCULO DE PERÍODOS DE CORTE ====================== */
 /* Genera el período de corte vigente o por índice. corte={ini,fin} */
 function periodoCorte(corte, refDate=new Date()){
@@ -538,21 +576,30 @@ let SESSION = null; // {role, name, contractorId?}
 $$("#rolePills .role-pill").forEach(p=>p.onclick=()=>{
   $$("#rolePills .role-pill").forEach(x=>x.classList.remove("on")); p.classList.add("on");
   const r=p.dataset.role;
-  $("#lUser").value = r==="supervisor"?"supervisor": r==="admin"?"admin":"1010123456";
+  $("#lUser").value = r==="supervisor"?"supervisor":"";
   $("#lPass").value = "";
 });
-function doLogin(){
+
+/* Al abrir la página en MODO VIVO, traer los datos compartidos del Sheet. */
+if(LIVE()){ loadFromBackend(); }
+
+async function doLogin(){
   const role=$(".role-pill.on").dataset.role;
   const u=$("#lUser").value.trim(), p=$("#lPass").value;
-  const creds={ supervisor:["supervisor","Supervisor2026!"], admin:["admin","Admin2026!"] };
-  if(role==="supervisor"||role==="admin"){
-    if(u===creds[role][0] && p===creds[role][1]){ start(role, role==="admin"?"Administrador":"Supervisor"); }
-    else toast("Credenciales incorrectas","error");
-  } else {
-    const c=DB.contractors.find(x=>x.doc===u || x.email===u);
-    if(c && p==="Temporal2026!"){ start("contratista", c.nombre, c.id); }
-    else toast("Documento o contraseña incorrectos","error");
-  }
+  const btn=$("#btnEntrar"); if(btn){ btn.disabled=true; }
+  try{
+    if(role==="supervisor"){
+      if(u==="supervisor" && p==="Supervisor2026!"){
+        if(LIVE()) await loadFromBackend();
+        start("supervisor","Supervisor");
+      } else toast("Credenciales incorrectas","error");
+    } else {
+      if(LIVE()) await loadFromBackend();
+      const c=DB.contractors.find(x=>String(x.doc).trim()===u || (x.email && x.email===u));
+      if(c && p==="Temporal2026!"){ start("contratista", c.nombre, c.id); }
+      else toast("Documento o contraseña incorrectos","error");
+    }
+  } finally { if(btn){ btn.disabled=false; } }
 }
 function logout(){ SESSION=null; $("#app").classList.remove("show"); $("#auth").style.display="grid"; }
 
