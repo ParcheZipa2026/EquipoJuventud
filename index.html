@@ -1122,7 +1122,7 @@ function modalContratista(id){
     </div>
     <button class="btn btn-cta btn-block mt" onclick="guardarContratista('${id||""}')"><span class="material-symbols-rounded">save</span> Guardar</button>`);
 }
-function guardarContratista(id){
+async function guardarContratista(id){
   const g=k=>$("#m_"+k)?.value;
   const data={ nombre:g("nombre"),doc:g("doc"),contrato:g("contrato"),dependencia:g("dependencia"),
     objeto:g("objeto"),supervisor:g("supervisor"),estado:g("estado"),plazoIni:g("plazoIni"),
@@ -1132,12 +1132,28 @@ function guardarContratista(id){
     vSalud:+g("vSalud")||0,vPension:+g("vPension")||0,vArl:+g("vArl")||0,obs:g("obs") };
   data.vAportes=data.vSalud+data.vPension+data.vArl;
   if(!data.nombre||!data.contrato) return toast("Nombre y contrato son obligatorios","edit");
+  data.doc=String(data.doc||"").trim();
+  if(!data.doc) return toast("El documento es obligatorio: es el usuario con el que el contratista ingresa","edit");
+  const dup=DB.contractors.find(c=>c.id!==id && String(c.doc).trim()===data.doc);
+  if(dup) return toast("Ese documento ya está usado por "+dup.nombre,"edit");
+
   let target;
-  if(id){ target=DB.contractors.find(c=>c.id===id); Object.assign(target,data); toast("Contrato actualizado ✓"); }
-  else { const nid=uid(); data.id=nid; target={id:nid,...data,obligaciones:mkObl(),novedades:[],email:""}; DB.contractors.push(target); toast("Contratista creado ✓"); }
+  if(id){ target=DB.contractors.find(c=>c.id===id); Object.assign(target,data); }
+  else { const nid=uid(); data.id=nid; target={id:nid,...data,obligaciones:mkObl(),novedades:[],email:""}; DB.contractors.push(target); }
+
   if(LIVE()){
-    apiCall("guardar_contratista",{id:id||data.id, data:{...data, id:id||data.id}}).catch(()=>{});
-    if(!id) persistObl(target);  // guardar las obligaciones base del contratista nuevo
+    try{
+      const res=await apiCall("guardar_contratista",{id:id||data.id, data:{...data, id:id||data.id}});
+      if(res && res.error) throw new Error(res.error);
+      if(!id) await apiCall("guardar_obligaciones",{contractorId:target.id, obligaciones:target.obligaciones});
+      toast(id?"Contrato actualizado y guardado ✓":"Contratista creado y guardado ✓");
+    }catch(e){
+      console.error("guardar_contratista:",e);
+      if(!id){ DB.contractors=DB.contractors.filter(c=>c.id!==target.id); } // revertir lo local si no se guardó
+      return toast("⚠ No se pudo guardar en el servidor. Revisa tu conexión e inténtalo otra vez.","error");
+    }
+  } else {
+    toast(id?"Contrato actualizado ✓":"Contratista creado ✓");
   }
   closeModal(); go(CURRENT);
 }
