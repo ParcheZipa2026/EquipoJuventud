@@ -827,10 +827,71 @@ function renderHist(){
       <p class="dim tiny mt-s" style="font-style:italic">"${hl(a.descRaw)}"</p>
       <p class="mt-s" style="font-size:13.5px">${hl(a.descAI)}</p>
       ${a.fotos.length?`<div class="photos">${a.fotos.map(f=>`<div class="photo-slot" style="cursor:default"><img src="${f}"></div>`).join("")}</div>`:""}
+      <div class="row mt-s" style="gap:8px">
+        <button class="btn btn-ghost btn-sm" onclick="editActividad('${a.id}')"><span class="material-symbols-rounded">edit</span> Editar</button>
+        <button class="btn btn-ghost btn-sm" onclick="delActividad('${a.id}')"><span class="material-symbols-rounded">delete</span> Eliminar</button>
+      </div>
     </div>`).join("")
     : `<div class="empty"><span class="material-symbols-rounded">inbox</span>No hay actividades${q?" que coincidan":" registradas aún"}.</div>`;
 }
 const oblText=(c,id)=> (c.obligaciones.find(o=>o.id===id)||{texto:"—"}).texto;
+
+/* ----- Editar / eliminar actividades desde el historial (contratista) ----- */
+let EDIT_FOTOS=[];
+function editActividad(id){
+  const c=me(); const a=DB.activities.find(x=>x.id===id); if(!a) return;
+  EDIT_FOTOS=(a.fotos||[]).slice();
+  const opts=c.obligaciones.filter(o=>o.activa).map(o=>`<option value="${o.id}" ${o.id===a.oblId?"selected":""}>${shorten(o.texto,90)}</option>`).join("");
+  openModal(`<span class="x material-symbols-rounded" onclick="closeModal()">close</span>
+    <h3>Editar actividad</h3><p class="muted tiny mb">Corrige tu redacción, cambia la obligación o quita una foto.</p>
+    <div class="form-grid">
+      <div class="f"><label>Fecha</label><input class="input" type="date" id="e_fecha" value="${a.fecha||""}"></div>
+      <div class="f"><label>Lugar</label><input class="input" id="e_lugar" value="${String(a.lugar||"").replace(/"/g,"&quot;")}"></div>
+      <div class="f full"><label>Obligación</label><select class="input" id="e_obl">${opts}</select></div>
+      <div class="f full"><label>Lo que escribiste</label><textarea class="input" id="e_raw">${a.descRaw||""}</textarea></div>
+      <div class="f full"><label>Descripción para el informe</label><textarea class="input" id="e_ai" style="min-height:90px">${a.descAI||""}</textarea></div>
+      <div class="f full"><label>Resultados obtenidos</label><textarea class="input" id="e_res">${a.resultados||""}</textarea></div>
+      <div class="f full"><label>Impacto generado</label><textarea class="input" id="e_imp">${a.impacto||""}</textarea></div>
+    </div>
+    <div class="mt-s" id="e_fotosWrap" style="${EDIT_FOTOS.length?"":"display:none"}">
+      <label class="tiny dim">Fotografías</label><div class="photos" id="e_fotos"></div></div>
+    <div class="row mt"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-purple btn-sm" onclick="guardarEdicion('${id}')"><span class="material-symbols-rounded">save</span> Guardar cambios</button></div>`);
+  renderEditFotos();
+}
+function renderEditFotos(){
+  const cont=$("#e_fotos"); if(!cont) return;
+  $("#e_fotosWrap").style.display = EDIT_FOTOS.length? "block":"none";
+  cont.innerHTML = EDIT_FOTOS.map((f,i)=>`<div class="photo-slot" style="cursor:default"><img src="${f}"><span class="rm material-symbols-rounded" onclick="quitarFotoEdit(${i})">close</span></div>`).join("");
+}
+function quitarFotoEdit(i){ EDIT_FOTOS.splice(i,1); renderEditFotos(); toast("Foto quitada (recuerda Guardar cambios)"); }
+async function guardarEdicion(id){
+  const a=DB.activities.find(x=>x.id===id); if(!a) return;
+  const v=k=>$("#e_"+k)?.value;
+  const prev={fecha:a.fecha,lugar:a.lugar,oblId:a.oblId,descRaw:a.descRaw,descAI:a.descAI,resultados:a.resultados,impacto:a.impacto,fotos:a.fotos};
+  a.fecha=v("fecha")||a.fecha; a.lugar=(v("lugar")||"").trim(); a.oblId=v("obl")||a.oblId;
+  a.descRaw=v("raw")||""; a.descAI=v("ai")||""; a.resultados=v("res")||""; a.impacto=v("imp")||"";
+  a.fotos=EDIT_FOTOS.slice();
+  if(LIVE()){
+    try{ const r=await apiCall("editar_actividad",{actividad:a}); if(r&&r.error) throw new Error(r.error); toast("Actividad actualizada ✓"); }
+    catch(e){ console.error("editar_actividad:",e); Object.assign(a,prev); return toast("⚠ No se pudo guardar el cambio en el servidor.","error"); }
+  } else toast("Actividad actualizada ✓");
+  closeModal(); renderHist();
+}
+function delActividad(id){
+  const a=DB.activities.find(x=>x.id===id); if(!a) return;
+  openModal(`<h3>Eliminar actividad</h3><p class="dim mt-s">¿Seguro que deseas eliminar la actividad del <b>${fmtDate(a.fecha)}</b>? Esta acción no se puede deshacer.</p>
+    <div class="row mt"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancelar</button>
+    <button class="btn btn-purple btn-sm" onclick="confirmDelActividad('${id}')"><span class="material-symbols-rounded">delete</span> Sí, eliminar</button></div>`);
+}
+async function confirmDelActividad(id){
+  if(LIVE()){
+    try{ const r=await apiCall("eliminar_actividad",{id}); if(r&&r.error) throw new Error(r.error); }
+    catch(e){ console.error("eliminar_actividad:",e); return toast("⚠ No se pudo eliminar en el servidor.","error"); }
+  }
+  DB.activities=DB.activities.filter(x=>x.id!==id);
+  closeModal(); renderHist(); toast("Actividad eliminada");
+}
 
 function vObligaciones(){
   const c=me(); const an=aiAnalizar(c, periodoCorte(c.corte));
@@ -905,14 +966,24 @@ async function generarWord(pi){
   const planilla=$("#iPlanilla")?.value||"____________";
   const entrega=$("#iEntrega")?.value||c.fechaInforme;
   if(LIVE()){
-    try{ toast("Generando .docx en el servidor…","cloud"); const r=await apiCall("generar_informe",{contractorId:c.id,periodo:per,planilla,entrega});
-      if(r.url){ window.open(r.url,"_blank"); return toast("Informe generado en Drive ✓"); } }catch(e){ toast("Backend no disponible, generando local","info"); }
+    try{
+      toast("Generando .docx en el servidor…","cloud");
+      const r=await apiCall("generar_informe",{contractorId:c.id,periodo:per,planilla,entrega});
+      if(r && r.url){ window.open(r.url,"_blank"); return toast("Informe generado en Drive ✓ (con fotos)"); }
+      if(r && r.error){ console.error("generar_informe:",r.error); toast("El servidor no pudo generar el informe; te descargo una versión local.","info"); }
+      else { console.error("generar_informe: respuesta inesperada",r); toast("Respuesta inesperada del servidor; versión local.","info"); }
+    }catch(e){ console.error("generar_informe:",e); toast("Sin conexión al servidor; versión local.","info"); }
   }
   const html=buildInformeHTML(c,per,planilla,entrega);
   const blob=new Blob(['\ufeff'+html],{type:"application/msword"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
   a.download=`Informe_${c.contrato}_${per.start}.doc`; a.click();
   toast("Informe descargado ✓ Ábrelo en Word");
+}
+function fotoCelda(f){
+  // Word (en .doc local) no muestra fotos de Drive ni base64; mostramos una casilla limpia.
+  // Las fotos reales sí salen incrustadas en el .docx que genera el servidor.
+  return `<div style="width:175px;min-height:120px;border:1px dashed #b9a6f5;border-radius:8px;display:inline-block;text-align:center;color:#6C3BFF;font-family:Arial;font-size:9pt;padding:42px 6px;margin:3px;background:#f6f3ff">📷<br>Evidencia fotográfica<br><span style="color:#8a7fb5;font-size:8pt">(incrustada en el informe del servidor)</span></div>`;
 }
 function buildInformeHTML(c,per,planilla,entrega){
   const acts=DB.activities.filter(a=>a.contractorId===c.id && enPeriodo(a.fecha,per));
@@ -929,7 +1000,7 @@ function buildInformeHTML(c,per,planilla,entrega){
           <b>Resultados obtenidos:</b> ${a.resultados}<br><br>
           <b>Impacto generado:</b> ${a.impacto}
         </td>
-        ${a.fotos.length?`<td width="38%" valign="top" style="padding:6px">${a.fotos.map(f=>`<img src="${f}" width="170" style="margin:3px;border:1px solid #ccc"/>`).join("")}</td>`:""}
+        ${a.fotos.length?`<td width="38%" valign="top" style="padding:6px">${a.fotos.map(f=>fotoCelda(f)).join("")}</td>`:""}
       </tr></table><hr style="border:none;border-top:1px solid #ddd">`;
     });
   });
