@@ -348,6 +348,34 @@ function openModal(html){ $("#modal").innerHTML=html; $("#modalBg").classList.ad
 function closeModal(){ $("#modalBg").classList.remove("show"); }
 $("#modalBg").addEventListener("click",e=>{ if(e.target.id==="modalBg") closeModal(); });
 
+/* ====================== FOTOS: MINIATURAS Y COMPRESIÓN ====================== */
+/* Google bloqueó "drive.google.com/uc?id=" dentro de <img>. Esta función
+   convierte cualquier URL de Drive al formato de miniatura que SÍ carga. */
+function fotoSrc(f){
+  if(!f) return "";
+  const s=String(f);
+  if(s.startsWith("data:")) return s;                 // foto local aún sin subir
+  const m=s.match(/[-\w]{25,}/);                      // extraer ID del archivo de Drive
+  return m ? "https://drive.google.com/thumbnail?id="+m[0]+"&sz=w400" : s;
+}
+/* Comprime la foto en el navegador ANTES de enviarla al servidor.
+   Una foto de celular (5–10 MB) baja a ~150–300 KB: guardado mucho más
+   rápido y confiable, sin perder calidad visible en el informe. */
+function comprimirFoto(dataUrl){
+  return new Promise(res=>{
+    const img=new Image();
+    img.onload=()=>{
+      const MAX=1280; let w=img.width,h=img.height;
+      if(w>MAX||h>MAX){ if(w>=h){h=Math.round(h*MAX/w);w=MAX;} else {w=Math.round(w*MAX/h);h=MAX;} }
+      const cv=document.createElement("canvas"); cv.width=w; cv.height=h;
+      cv.getContext("2d").drawImage(img,0,0,w,h);
+      try{ res(cv.toDataURL("image/jpeg",0.82)); }catch(e){ res(dataUrl); }
+    };
+    img.onerror=()=>res(dataUrl);
+    img.src=dataUrl;
+  });
+}
+
 /* ====================== BASE DE DATOS DEMO ====================== */
 /* Cortes de ejecución individuales: {ini, fin} = día de inicio y fin del período mensual */
 const OBL_BASE = [
@@ -427,41 +455,29 @@ function placeholderPhoto(){
 }
 
 /* ====================== MOTOR DE IA (heurística demo) ====================== */
-/* En MODO VIVO estas funciones llaman al backend (ver aiLive). Aquí, redacción local. */
+/* En MODO VIVO estas funciones llaman al backend (ver aiLive). Aquí, redacción local.
+   IMPORTANTE: la redacción de respaldo CONSERVA lo que escribió el contratista
+   (solo lo formaliza), en vez de reemplazarlo por un párrafo genérico. */
 function aiMejorarTexto(raw, oblTexto=""){
   if(!raw || !raw.trim()) return "";
-  const t = raw.toLowerCase();
-  const lugar = /colegio|institución|instituci|escuela|ie /.test(t) ? "la institución educativa"
-              : /parque|cancha|barrio|comunidad/.test(t) ? "el espacio comunitario"
-              : /casa de la juventud|oficina|despacho/.test(t) ? "las instalaciones del Programa de Juventud"
-              : "el territorio";
-  const accion = /taller|capacit|formaci/.test(t) ? "una jornada de formación"
-               : /reunión|reunion|articul|coordin/.test(t) ? "una jornada de articulación y coordinación"
-               : /liderazgo/.test(t) ? "una jornada de fortalecimiento del liderazgo juvenil"
-               : /reporte|sistematiz|organic|organiz/.test(t) ? "actividades de sistematización y consolidación de la información"
-               : "una jornada de acompañamiento";
-  const enfoque = /participaci/.test(t) ? "la participación juvenil"
-               : /liderazgo/.test(t) ? "el fortalecimiento del liderazgo"
-               : /convivencia/.test(t) ? "la convivencia y la sana interacción"
-               : /reporte|sistematiz/.test(t) ? "la consolidación documental de la gestión"
-               : "la vinculación de los jóvenes a la oferta institucional";
-  let s = `Se desarrolló ${accion} en ${lugar}, en el marco del Programa de Juventud de la Secretaría de Familia y Desarrollo Social, promoviendo espacios orientados a ${enfoque}`;
-  if(/jóvenes|jovenes|muchachos|estudiantes|chicos/.test(t)) s += ", con la participación activa de jóvenes del municipio";
-  s += ". La actividad se ejecutó conforme a la obligación contractual y a los lineamientos institucionales del Programa.";
-  return s;
+  let t=raw.trim();
+  t=t.charAt(0).toUpperCase()+t.slice(1);
+  if(!/[.!?]$/.test(t)) t+=".";
+  return t+" La actividad se desarrolló en el marco del Programa de Juventud de la Secretaría de Familia y Desarrollo Social, en cumplimiento de la obligación contractual correspondiente.";
 }
 function aiResultados(raw){
   const t=(raw||"").toLowerCase();
   if(/taller|formaci|capacit/.test(t)) return "Se logró la realización efectiva de la jornada de formación, con la vinculación de los jóvenes participantes y el desarrollo de los contenidos previstos.";
-  if(/reunión|articul|coordin/.test(t)) return "Se logró la articulación de los actores convocados y la definición de acciones conjuntas para el desarrollo de las actividades del Programa.";
-  if(/reporte|sistematiz|organic/.test(t)) return "Se consolidó la información correspondiente al período, dejando los soportes debidamente organizados y disponibles para la supervisión.";
-  return "Se cumplió con la actividad programada, generando espacios de participación y acercamiento de los jóvenes a la oferta institucional.";
+  if(/reunión|articul|coordin|mesa/.test(t)) return "Se logró la articulación de los actores convocados y la definición de acciones conjuntas para el desarrollo de las actividades del Programa.";
+  if(/reporte|sistematiz|organic|present|powerpoint|informe|document/.test(t)) return "Se consolidó el producto correspondiente, dejando los soportes debidamente organizados y disponibles para la supervisión.";
+  return "Se cumplió con la actividad descrita, dejando los productos y soportes correspondientes a disposición de la supervisión.";
 }
 function aiImpacto(raw){
   const t=(raw||"").toLowerCase();
   if(/lider/.test(t)) return "Se contribuyó al fortalecimiento del liderazgo y la corresponsabilidad de los jóvenes frente a los procesos comunitarios del municipio.";
   if(/participaci/.test(t)) return "Se aportó al fortalecimiento de la participación juvenil y al posicionamiento del Programa de Juventud en el territorio.";
-  return "Se generó un impacto positivo en la población juvenil, aportando a los objetivos del Programa de Juventud de Zipaquirá.";
+  if(/auditor|informe|present|reporte|sistematiz/.test(t)) return "Se fortaleció la gestión documental e institucional del Programa de Juventud, facilitando los procesos de seguimiento y control.";
+  return "Se aportó al desarrollo de la gestión del Programa de Juventud y al cumplimiento de los compromisos contractuales del período.";
 }
 
 /* Análisis del expediente: alertas + semáforo por obligación */
@@ -544,12 +560,15 @@ async function loadFromBackend(){
         obligaciones: lista.length ? lista : mkObl(), novedades:misNov, email:row.email||""
       };
     });
+    /* No pisar actividades locales que aún no se han sincronizado con el servidor */
+    const pendientes = DB.activities.filter(a=>a._sinSync);
     DB.activities = acts.filter(a=>a && a.id!==undefined && a.id!=="").map(a=>({
       id:String(a.id), contractorId:String(a.contractorId), oblId:String(a.oblId||""),
       fecha:d10(a.fecha), lugar:a.lugar||"", descRaw:a.descRaw||"", descAI:a.descAI||"",
       resultados:a.resultados||"", impacto:a.impacto||"",
       fotos:[a.foto1,a.foto2].filter(x=>x && String(x).trim())
     }));
+    pendientes.forEach(p=>{ if(!DB.activities.some(x=>x.id===p.id)) DB.activities.push(p); });
     return true;
   }catch(e){ console.warn("No se pudo cargar del backend; se usan datos locales.", e); return false; }
 }
@@ -748,7 +767,7 @@ function vRegistrar(){
             </div>
           </div>
         </div>
-        <button class="btn btn-cta btn-block mt" onclick="guardarActividad()"><span class="material-symbols-rounded">save</span> Guardar actividad</button>
+        <button class="btn btn-cta btn-block mt" id="btnGuardarAct" onclick="guardarActividad()"><span class="material-symbols-rounded">save</span> Guardar actividad</button>
       </div>
       <div class="card">
         <div class="ai-tag"><span class="material-symbols-rounded">auto_awesome</span> Vista previa IA</div>
@@ -765,8 +784,12 @@ async function previewAI(){
   toast("Mejorando con IA…","auto_awesome");
   let desc,res,imp;
   if(LIVE()){
-    try{ const r=await apiCall("ai_mejorar",{texto:raw,obligacion:obl.texto}); desc=r.desc;res=r.resultados;imp=r.impacto; }
-    catch(e){ desc=aiMejorarTexto(raw,obl.texto);res=aiResultados(raw);imp=aiImpacto(raw); }
+    try{
+      const r=await apiCall("ai_mejorar",{texto:raw,obligacion:obl.texto});
+      if(r && r.desc){ desc=r.desc; res=r.resultados; imp=r.impacto; }
+      else throw new Error((r&&r.error)||"respuesta vacía de la IA");
+    }
+    catch(e){ console.warn("ai_mejorar:",e); desc=aiMejorarTexto(raw,obl.texto);res=aiResultados(raw);imp=aiImpacto(raw); }
   } else { desc=aiMejorarTexto(raw,obl.texto);res=aiResultados(raw);imp=aiImpacto(raw); }
   $("#aiDesc").value=desc; $("#aiRes").value=res; $("#aiImp").value=imp;
 }
@@ -775,9 +798,11 @@ function addPhoto(input,i){
   const f=input.files[0]; if(!f) return;
   if(!f.type.startsWith("image/")){ input.value=""; return toast("Solo se permiten imágenes","block"); }
   const rd=new FileReader();
-  rd.onload=()=>{ REG_PHOTOS[i]=rd.result;
+  rd.onload=async ()=>{
+    const comp=await comprimirFoto(rd.result);   // comprimir antes de guardar: sube MUCHO más rápido
+    REG_PHOTOS[i]=comp;
     const slot=$("#slot"+i);
-    slot.innerHTML=`<img src="${rd.result}"><span class="rm material-symbols-rounded" onclick="rmPhoto(event,${i})">close</span>`;
+    slot.innerHTML=`<img src="${comp}"><span class="rm material-symbols-rounded" onclick="rmPhoto(event,${i})">close</span>`;
   };
   rd.readAsDataURL(f);
 }
@@ -791,6 +816,10 @@ function dictar(id){
   r.onresult=e=>{ const txt=e.results[0][0].transcript; const el=$("#"+id); el.value=(el.value?el.value+" ":"")+txt; };
   r.onerror=()=>toast("No se pudo escuchar","error");
 }
+/* Guardado OPTIMISTA: la actividad aparece de inmediato en el historial y
+   se sincroniza con el servidor en segundo plano. Si el servidor falla,
+   la actividad queda marcada "sin sincronizar" con botón Reintentar
+   (antes el error se ocultaba y la actividad no llegaba al informe). */
 async function guardarActividad(){
   const c=me();
   const fecha=$("#rFecha").value, lugar=$("#rLugar").value.trim(), oblId=$("#rObl").value, raw=$("#rDesc").value.trim();
@@ -800,9 +829,35 @@ async function guardarActividad(){
   const fotos=REG_PHOTOS.filter(Boolean);
   const act={ id:uid(),contractorId:c.id,oblId,fecha,lugar,descRaw:raw,descAI,
     resultados:$("#aiRes").value.trim()||aiResultados(raw), impacto:$("#aiImp").value.trim()||aiImpacto(raw), fotos };
-  if(LIVE()){ try{ await apiCall("guardar_actividad",{actividad:act}); }catch(e){} }
   DB.activities.push(act);
-  toast("Actividad guardada ✓"); go("historial");
+  if(LIVE()){
+    act._sinSync=true;
+    go("historial");
+    toast("Guardando en el servidor…","cloud_upload");
+    apiCall("guardar_actividad",{actividad:act}).then(r=>{
+      if(r && r.error) throw new Error(r.error);
+      delete act._sinSync;
+      if(CURRENT==="historial") renderHist();
+      toast("Actividad guardada ✓");
+    }).catch(e=>{
+      console.error("guardar_actividad:",e);
+      if(CURRENT==="historial") renderHist();
+      toast("⚠ No se guardó en el servidor. Pulsa «Reintentar» en la actividad.","error");
+    });
+  } else {
+    toast("Actividad guardada ✓"); go("historial");
+  }
+}
+/* Reintentar la sincronización de una actividad que quedó pendiente.
+   Usa editar_actividad (que crea o actualiza) para no duplicar filas. */
+async function reintentarSync(id){
+  const a=DB.activities.find(x=>x.id===id); if(!a) return;
+  toast("Sincronizando…","cloud_upload");
+  try{
+    const r=await apiCall("editar_actividad",{actividad:a});
+    if(r && r.error) throw new Error(r.error);
+    delete a._sinSync; renderHist(); toast("Actividad sincronizada ✓");
+  }catch(e){ console.error("reintentar sync:",e); toast("⚠ Aún no se pudo sincronizar. Revisa tu conexión.","error"); }
 }
 
 function vHistorial(){
@@ -821,13 +876,15 @@ function renderHist(){
     <div class="card mb">
       <div class="row spread">
         <div class="row"><span class="chip"><span class="material-symbols-rounded">event</span>${fmtDate(a.fecha)}</span>
-          <span class="chip"><span class="material-symbols-rounded">place</span>${hl(a.lugar)}</span></div>
+          <span class="chip"><span class="material-symbols-rounded">place</span>${hl(a.lugar)}</span>
+          ${a._sinSync?`<span class="badge warn"><span class="material-symbols-rounded" style="font-size:14px">cloud_off</span> Sin sincronizar</span>`:""}</div>
         <span class="tag-mini">${shorten(oblText(c,a.oblId),40)}</span>
       </div>
       <p class="dim tiny mt-s" style="font-style:italic">"${hl(a.descRaw)}"</p>
       <p class="mt-s" style="font-size:13.5px">${hl(a.descAI)}</p>
-      ${a.fotos.length?`<div class="photos">${a.fotos.map(f=>`<div class="photo-slot" style="cursor:default"><img src="${f}"></div>`).join("")}</div>`:""}
+      ${a.fotos.length?`<div class="photos">${a.fotos.map(f=>`<div class="photo-slot" style="cursor:default"><img src="${fotoSrc(f)}" loading="lazy" alt="Evidencia"></div>`).join("")}</div>`:""}
       <div class="row mt-s" style="gap:8px">
+        ${a._sinSync?`<button class="btn btn-purple btn-sm" onclick="reintentarSync('${a.id}')"><span class="material-symbols-rounded">sync</span> Reintentar</button>`:""}
         <button class="btn btn-ghost btn-sm" onclick="editActividad('${a.id}')"><span class="material-symbols-rounded">edit</span> Editar</button>
         <button class="btn btn-ghost btn-sm" onclick="delActividad('${a.id}')"><span class="material-symbols-rounded">delete</span> Eliminar</button>
       </div>
@@ -862,7 +919,7 @@ function editActividad(id){
 function renderEditFotos(){
   const cont=$("#e_fotos"); if(!cont) return;
   $("#e_fotosWrap").style.display = EDIT_FOTOS.length? "block":"none";
-  cont.innerHTML = EDIT_FOTOS.map((f,i)=>`<div class="photo-slot" style="cursor:default"><img src="${f}"><span class="rm material-symbols-rounded" onclick="quitarFotoEdit(${i})">close</span></div>`).join("");
+  cont.innerHTML = EDIT_FOTOS.map((f,i)=>`<div class="photo-slot" style="cursor:default"><img src="${fotoSrc(f)}" loading="lazy"><span class="rm material-symbols-rounded" onclick="quitarFotoEdit(${i})">close</span></div>`).join("");
 }
 function quitarFotoEdit(i){ EDIT_FOTOS.splice(i,1); renderEditFotos(); toast("Foto quitada (recuerda Guardar cambios)"); }
 async function guardarEdicion(id){
@@ -873,7 +930,7 @@ async function guardarEdicion(id){
   a.descRaw=v("raw")||""; a.descAI=v("ai")||""; a.resultados=v("res")||""; a.impacto=v("imp")||"";
   a.fotos=EDIT_FOTOS.slice();
   if(LIVE()){
-    try{ const r=await apiCall("editar_actividad",{actividad:a}); if(r&&r.error) throw new Error(r.error); toast("Actividad actualizada ✓"); }
+    try{ const r=await apiCall("editar_actividad",{actividad:a}); if(r&&r.error) throw new Error(r.error); delete a._sinSync; toast("Actividad actualizada ✓"); }
     catch(e){ console.error("editar_actividad:",e); Object.assign(a,prev); return toast("⚠ No se pudo guardar el cambio en el servidor.","error"); }
   } else toast("Actividad actualizada ✓");
   closeModal(); renderHist();
@@ -936,13 +993,25 @@ function vInforme(){
       <p class="muted tiny mt-s">El sistema arma el informe en Word automáticamente, organizado por obligación, con fotos y aportes. Tú nunca escribes las fechas.</p>
       <div class="form-grid mt">
         <div class="f"><label>Período de corte</label>
-          <select class="input" id="iPeriodo">${periodos.map((p,i)=>`<option value="${i}">${fmtDate(p.start)} al ${fmtDate(p.end)}</option>`).join("")}</select></div>
+          <select class="input" id="iPeriodo" onchange="mostrarActsPeriodo()">${periodos.map((p,i)=>`<option value="${i}">${fmtDate(p.start)} al ${fmtDate(p.end)}</option>`).join("")}</select></div>
         <div class="f"><label>Fecha de entrega del informe</label><input class="input" type="date" id="iEntrega" value="${c.fechaInforme}"></div>
         <div class="f"><label>Número de planilla de aportes</label><input class="input" id="iPlanilla" placeholder="Se diligencia antes de descargar"></div>
       </div>
+      <div class="mt-s tiny dim" id="iConteo"></div>
       <button class="btn btn-purple mt" onclick="revisarInforme()"><span class="material-symbols-rounded">fact_check</span> Revisar con IA antes de generar</button>
     </div>
     <div id="iRevision"></div>`;
+  mostrarActsPeriodo();
+}
+/* Muestra cuántas actividades entrarán al informe según el período elegido,
+   y avisa si hay actividades sin sincronizar (que NO saldrían en el .docx del servidor). */
+function mostrarActsPeriodo(){
+  const c=me(); const per=periodosDisponibles(c.corte)[+($("#iPeriodo")?.value||0)];
+  const acts=DB.activities.filter(a=>a.contractorId===c.id && enPeriodo(a.fecha,per));
+  const pend=acts.filter(a=>a._sinSync).length;
+  let msg=`Este período incluye <b>${acts.length}</b> actividad(es).`;
+  if(pend) msg+=` <span style="color:var(--warn)">⚠ ${pend} sin sincronizar: ve al Historial y pulsa «Reintentar» antes de generar, o no saldrán en el informe.</span>`;
+  const el=$("#iConteo"); if(el) el.innerHTML=msg;
 }
 function revisarInforme(){
   const c=me(); const per=periodosDisponibles(c.corte)[+$("#iPeriodo").value]; const an=aiAnalizar(c,per);
@@ -958,7 +1027,7 @@ function revisarInforme(){
       <div class="ai-tag"><span class="material-symbols-rounded">verified</span> Revisión inteligente del informe</div>
       <div class="alert-list">${checks.map(([t,n,d])=>`<div class="alert"><span class="dot ${n}"></span><div><b>${t}</b><br><span class="muted tiny">${d}</span></div></div>`).join("")}</div>
     </div>
-    <button class="btn btn-cta btn-block" onclick="generarWord(${$("#iPeriodo").value})"><span class="material-symbols-rounded">download</span> Generar informe en Word (.doc)</button>
+    <button class="btn btn-cta btn-block" onclick="generarWord(${$("#iPeriodo").value})"><span class="material-symbols-rounded">download</span> Generar informe en Word</button>
     <p class="muted tiny mt-s" style="text-align:center">En modo vivo el backend genera un .docx nativo con Google Docs. En demo se descarga un archivo Word editable.</p>`;
 }
 async function generarWord(pi){
@@ -969,7 +1038,7 @@ async function generarWord(pi){
     try{
       toast("Generando .docx en el servidor…","cloud");
       const r=await apiCall("generar_informe",{contractorId:c.id,periodo:per,planilla,entrega});
-      if(r && r.url){ window.open(r.url,"_blank"); return toast("Informe generado en Drive ✓ (con fotos)"); }
+      if(r && r.url){ window.open(r.url,"_blank"); return toast(`Informe generado ✓ (${r.actividades??"—"} actividades, con fotos)`); }
       if(r && r.error){ console.error("generar_informe:",r.error); toast("El servidor no pudo generar el informe; te descargo una versión local.","info"); }
       else { console.error("generar_informe: respuesta inesperada",r); toast("Respuesta inesperada del servidor; versión local.","info"); }
     }catch(e){ console.error("generar_informe:",e); toast("Sin conexión al servidor; versión local.","info"); }
@@ -991,7 +1060,7 @@ function buildInformeHTML(c,per,planilla,entrega){
   let desarrollo="";
   oblsConActs.forEach((o,i)=>{
     const list=acts.filter(a=>a.oblId===o.id); if(!list.length) return;
-    desarrollo+=`<h3 style="color:#6C3BFF;font-family:Arial">OBLIGACIÓN ${i+1}. ${o.texto}</h3>`;
+    desarrollo+=`<h3 style="color:#073763;font-family:Arial">OBLIGACIÓN ${i+1}. ${o.texto}</h3>`;
     list.forEach(a=>{
       desarrollo+=`<table width="100%" style="border-collapse:collapse;margin:8px 0"><tr>
         <td width="${a.fotos.length?'62%':'100%'}" valign="top" style="padding:6px;font-family:Arial;font-size:11pt">
@@ -1005,23 +1074,22 @@ function buildInformeHTML(c,per,planilla,entrega){
     });
   });
   return `<html><head><meta charset="utf-8"></head><body style="font-family:Arial;font-size:11pt;color:#222">
-  <div style="text-align:center"><h2 style="color:#6C3BFF;margin:0">SECRETARÍA DE FAMILIA Y DESARROLLO SOCIAL</h2>
+  <div style="text-align:center"><h2 style="color:#073763;margin:0">SECRETARÍA DE FAMILIA Y DESARROLLO SOCIAL</h2>
   <h3 style="margin:4px 0">Programa de Juventud · Parche Zipa</h3>
   <p><b>INFORME DE ACTIVIDADES</b><br>Período: ${fmtDate(per.start)} al ${fmtDate(per.end)}</p></div>
-  <h3 style="color:#6C3BFF">1. Información contractual</h3>
+  <h3 style="color:#073763">1. Información contractual</h3>
   <table width="100%" style="border-collapse:collapse;font-size:10.5pt">
-  ${[["No. Contrato",c.contrato],["Objeto",c.objeto],["Contratista",c.nombre],["Plazo ejecución inicial",c.plazoIni],["Plazo a prorrogar",c.plazoProrroga],["Plazo total",c.plazoTotal],["Valor inicial",fmtMoney(c.valorIni)],["Valor a adicionar",fmtMoney(c.valorAdic)],["Fecha de inicio",fmtDate(c.fechaIni)],["Fecha de terminación",fmtDate(c.fechaFin)],["Corte de ejecución",`${fmtDate(per.start)} al ${fmtDate(per.end)}`],["Fecha entrega del informe",fmtDate(entrega)]].map(([k,v])=>`<tr><td style="border:1px solid #ccc;padding:5px;background:#f3f0ff;width:32%"><b>${k}</b></td><td style="border:1px solid #ccc;padding:5px">${v}</td></tr>`).join("")}
+  ${[["No. Contrato",c.contrato],["Objeto",c.objeto],["Contratista",c.nombre],["Plazo ejecución inicial",c.plazoIni],["Plazo a prorrogar",c.plazoProrroga],["Plazo total",c.plazoTotal],["Valor inicial",fmtMoney(c.valorIni)],["Valor a adicionar",fmtMoney(c.valorAdic)],["Fecha de inicio",fmtDate(c.fechaIni)],["Fecha de terminación",fmtDate(c.fechaFin)],["Corte de ejecución",`${fmtDate(per.start)} al ${fmtDate(per.end)}`],["Fecha entrega del informe",fmtDate(entrega)]].map(([k,v])=>`<tr><td style="border:1px solid #ccc;padding:5px;background:#e8f0fa;width:32%"><b>${k}</b></td><td style="border:1px solid #ccc;padding:5px">${v}</td></tr>`).join("")}
   </table>
-  <h3 style="color:#6C3BFF">2. Aportes al sistema de seguridad social</h3>
+  <h3 style="color:#073763">2. Aportes al sistema de seguridad social</h3>
   <table width="100%" style="border-collapse:collapse;font-size:10.5pt">
-  <tr style="background:#f3f0ff"><td style="border:1px solid #ccc;padding:5px"><b>EPS</b></td><td style="border:1px solid #ccc;padding:5px"><b>Pensión</b></td><td style="border:1px solid #ccc;padding:5px"><b>ARL</b></td><td style="border:1px solid #ccc;padding:5px"><b>N° Planilla</b></td></tr>
+  <tr style="background:#9fc5e8"><td style="border:1px solid #ccc;padding:5px"><b>EPS</b></td><td style="border:1px solid #ccc;padding:5px"><b>Pensión</b></td><td style="border:1px solid #ccc;padding:5px"><b>ARL</b></td><td style="border:1px solid #ccc;padding:5px"><b>N° Planilla</b></td></tr>
   <tr><td style="border:1px solid #ccc;padding:5px">${c.eps}</td><td style="border:1px solid #ccc;padding:5px">${c.pension}</td><td style="border:1px solid #ccc;padding:5px">${c.arl}</td><td style="border:1px solid #ccc;padding:5px">${planilla}</td></tr>
   <tr><td style="border:1px solid #ccc;padding:5px">Salud: ${fmtMoney(c.vSalud)}</td><td style="border:1px solid #ccc;padding:5px">Pensión: ${fmtMoney(c.vPension)}</td><td style="border:1px solid #ccc;padding:5px">ARL: ${fmtMoney(c.vArl)}</td><td style="border:1px solid #ccc;padding:5px"><b>Total: ${fmtMoney(c.vAportes)}</b></td></tr>
   </table>
-  <h3 style="color:#6C3BFF">3. Desarrollo del informe</h3>
+  <h3 style="color:#073763">3. Desarrollo del informe</h3>
   ${desarrollo||"<p>No se registraron actividades en el período seleccionado.</p>"}
-  <br><br><table width="100%"><tr><td style="text-align:center">_______________________<br>${c.nombre}<br>Contratista</td>
-  <td style="text-align:center">_______________________<br>${c.supervisor}<br>Supervisor</td></tr></table>
+  <br><br><table width="100%"><tr><td style="text-align:center">_______________________<br>${c.nombre}<br>Contratista</td></tr></table>
   </body></html>`;
 }
 
@@ -1038,7 +1106,6 @@ function vDashboard(){
   const cumplProm=Math.round(cs.reduce((s,c)=>s+aiAnalizar(c,periodoCorte(c.corte)).avance,0)/cs.length);
   const valEjec=Math.round(valContratado*cumplProm/100);
   const ranking=cs.map(c=>({c,av:aiAnalizar(c,periodoCorte(c.corte)).avance})).sort((a,b)=>b.av-a.av);
-  // actividades por mes
   const porMes={}; DB.activities.forEach(a=>{ const m=a.fecha.slice(0,7); porMes[m]=(porMes[m]||0)+1; });
   const meses=Object.keys(porMes).sort().slice(-6); const maxM=Math.max(1,...meses.map(m=>porMes[m]));
   $("#view").innerHTML=`
@@ -1103,7 +1170,6 @@ function verExpediente(id){
     </div>`);
 }
 
-/* ====================== MATRIZ DE SUPERVISIÓN ====================== */
 function vMatriz(){
   const cs=DB.contractors;
   $("#view").innerHTML=`
@@ -1141,10 +1207,10 @@ function renderMatriz(){
 function descargarMatriz(id,pi){
   const c=DB.contractors.find(x=>x.id===id); const per=periodosDisponibles(c.corte)[pi]; const an=aiAnalizar(c,per);
   const html=`<html><head><meta charset="utf-8"></head><body style="font-family:Arial">
-    <h2 style="color:#6C3BFF;text-align:center">MATRIZ DE SUPERVISIÓN</h2>
+    <h2 style="color:#073763;text-align:center">MATRIZ DE SUPERVISIÓN</h2>
     <p style="text-align:center">${c.nombre} · ${c.contrato}<br>Período: ${fmtDate(per.start)} al ${fmtDate(per.end)}</p>
     <table width="100%" style="border-collapse:collapse;font-size:10pt">
-    <tr style="background:#6C3BFF;color:#fff"><td style="border:1px solid #999;padding:6px">Obligación</td><td style="border:1px solid #999;padding:6px">Actividades</td><td style="border:1px solid #999;padding:6px">Concepto</td><td style="border:1px solid #999;padding:6px">Observación</td></tr>
+    <tr style="background:#073763;color:#fff"><td style="border:1px solid #999;padding:6px">Obligación</td><td style="border:1px solid #999;padding:6px">Actividades</td><td style="border:1px solid #999;padding:6px">Concepto</td><td style="border:1px solid #999;padding:6px">Observación</td></tr>
     ${an.porObl.map(p=>`<tr><td style="border:1px solid #999;padding:6px">${p.obl.texto}</td><td style="border:1px solid #999;padding:6px">${p.acts.map(a=>fmtDate(a.fecha)+" — "+shorten(a.descAI,60)).join("<br>")||"Sin actividades"}</td><td style="border:1px solid #999;padding:6px">${p.sem==='g'?'Cumple':p.sem==='y'?'Parcial':'No cumple'}</td><td style="border:1px solid #999;padding:6px">${aiObservacionSupervisor(p)}</td></tr>`).join("")}
     </table></body></html>`;
   const blob=new Blob(['\ufeff'+html],{type:"application/msword"});
@@ -1152,7 +1218,6 @@ function descargarMatriz(id,pi){
   toast("Matriz descargada ✓");
 }
 
-/* ====================== ADMINISTRACIÓN ====================== */
 function vAdmin(){
   $("#topActions").innerHTML=`<button class="btn btn-cta btn-sm" onclick="modalContratista()"><span class="material-symbols-rounded">person_add</span> Nuevo contratista</button>`;
   $("#view").innerHTML=`<div class="tbl-wrap"><table style="min-width:720px"><thead><tr>
@@ -1207,11 +1272,9 @@ async function guardarContratista(id){
   if(!data.doc) return toast("El documento es obligatorio: es el usuario con el que el contratista ingresa","edit");
   const dup=DB.contractors.find(c=>c.id!==id && String(c.doc).trim()===data.doc);
   if(dup) return toast("Ese documento ya está usado por "+dup.nombre,"edit");
-
   let target;
   if(id){ target=DB.contractors.find(c=>c.id===id); Object.assign(target,data); }
   else { const nid=uid(); data.id=nid; target={id:nid,...data,obligaciones:mkObl(),novedades:[],email:""}; DB.contractors.push(target); }
-
   if(LIVE()){
     try{
       const res=await apiCall("guardar_contratista",{id:id||data.id, data:{...data, id:id||data.id}});
@@ -1220,22 +1283,19 @@ async function guardarContratista(id){
       toast(id?"Contrato actualizado y guardado ✓":"Contratista creado y guardado ✓");
     }catch(e){
       console.error("guardar_contratista:",e);
-      if(!id){ DB.contractors=DB.contractors.filter(c=>c.id!==target.id); } // revertir lo local si no se guardó
-      return toast("⚠ No se pudo guardar en el servidor. Revisa tu conexión e inténtalo otra vez.","error");
+      if(!id){ DB.contractors=DB.contractors.filter(c=>c.id!==target.id); }
+      return toast("⚠ No se pudo guardar en el servidor. Revisa tu conexión.","error");
     }
-  } else {
-    toast(id?"Contrato actualizado ✓":"Contratista creado ✓");
-  }
+  } else { toast(id?"Contrato actualizado ✓":"Contratista creado ✓"); }
   closeModal(); go(CURRENT);
 }
 function eliminarContratista(id){
   const c=DB.contractors.find(x=>x.id===id);
-  openModal(`<h3>Eliminar contratista</h3><p class="dim mt-s">¿Seguro que deseas eliminar a <b>${c.nombre}</b>? Esta acción no se puede deshacer.</p>
+  openModal(`<h3>Eliminar contratista</h3><p class="dim mt-s">¿Seguro que deseas eliminar a <b>${c.nombre}</b>?</p>
     <div class="row mt"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancelar</button>
     <button class="btn btn-cta btn-sm" onclick="DB.contractors=DB.contractors.filter(x=>x.id!=='${id}');closeModal();go(CURRENT);toast('Contratista eliminado')">Sí, eliminar</button></div>`);
 }
 
-/* ----- Obligaciones: crear, editar, eliminar, reordenar (drag), activar ----- */
 let DRAG=null;
 function modalObligaciones(id){
   const c=DB.contractors.find(x=>x.id===id);
@@ -1278,7 +1338,6 @@ function delObl(cid,oid){ const c=DB.contractors.find(x=>x.id===cid); c.obligaci
 function editObl(cid,oid){ const c=DB.contractors.find(x=>x.id===cid); const o=c.obligaciones.find(x=>x.id===oid);
   const t=prompt("Editar obligación:",o.texto); if(t){o.texto=t;$("#oblList").innerHTML=oblListHTML(c);bindDrag(c);persistObl(c);} }
 
-/* ----- Novedades: adiciones, prórrogas, suspensiones, reinicios, liquidaciones ----- */
 function modalNovedad(id){
   const c=DB.contractors.find(x=>x.id===id);
   openModal(`<span class="x material-symbols-rounded" onclick="closeModal()">close</span>
@@ -1298,7 +1357,6 @@ function addNovedad(id){ const c=DB.contractors.find(x=>x.id===id);
   if($("#nTipo").value==="Suspensión")c.estado="suspendido"; if($("#nTipo").value==="Reinicio")c.estado="activo"; if($("#nTipo").value==="Liquidación")c.estado="liquidado";
   $("#novList").innerHTML=novListHTML(c); persistNov(c); if(LIVE()) guardarContratistaLive(c); toast("Novedad registrada ✓"); }
 
-/* ----- Detalle de contrato (reutilizable) ----- */
 function contractoDetalleHTML(c,readonly){
   return `<div class="card mb"><div class="eyebrow">Objeto contractual</div><p style="font-size:14px">${c.objeto}</p></div>
   <div class="grid g-2">
@@ -1320,7 +1378,6 @@ function contractoDetalleHTML(c,readonly){
     </div></div>`;
 }
 
-/* ====================== MODO ====================== */
 console.log("%cParche Zipa","color:#6C3BFF;font-weight:bold;font-size:16px", LIVE()?"· MODO VIVO":"· MODO DEMO");
 
 </script>
