@@ -375,6 +375,29 @@ function comprimirFoto(dataUrl){
     img.src=dataUrl;
   });
 }
+/* Convierte una foto (URL de Drive o base64) a base64 para incrustarla en el
+   informe local. Si es de Drive, la carga por canvas con CORS; si falla,
+   devuelve "" y el informe usa la miniatura como respaldo. */
+function fotoBase64(f){
+  return new Promise(res=>{
+    if(!f) return res("");
+    const s=String(f);
+    if(s.startsWith("data:")) return res(s);          // ya es base64
+    const src=fotoSrc(f);
+    const img=new Image();
+    img.crossOrigin="anonymous";
+    img.onload=()=>{
+      try{
+        const cv=document.createElement("canvas");
+        cv.width=img.naturalWidth||400; cv.height=img.naturalHeight||400;
+        cv.getContext("2d").drawImage(img,0,0);
+        res(cv.toDataURL("image/jpeg",0.85));
+      }catch(e){ res(""); }                            // canvas "tainted" por CORS
+    };
+    img.onerror=()=>res("");
+    img.src=src;
+  });
+}
 
 /* ====================== BASE DE DATOS DEMO ====================== */
 /* Cortes de ejecución individuales: {ini, fin} = día de inicio y fin del período mensual */
@@ -436,7 +459,7 @@ DB.contractors.forEach(c=>{ c.vAportes = c.vSalud + c.vPension + c.vArl; });
   const a=(c,oi,fecha,lugar,desc,fotos=0)=>DB.activities.push({
     id:uid(), contractorId:c.id, oblId:c.obligaciones[oi].id, fecha, lugar,
     descRaw:desc, descAI:aiMejorarTexto(desc,c.obligaciones[oi].texto),
-    resultados:aiResultados(desc), impacto:aiImpacto(desc),
+    soporte:"",
     fotos:Array.from({length:fotos}).map(()=>placeholderPhoto())
   });
   a(c1,0,"2026-05-23","IE Técnico Industrial","fui al colegio y hablé con los jóvenes sobre participación",2);
@@ -565,7 +588,7 @@ async function loadFromBackend(){
     DB.activities = acts.filter(a=>a && a.id!==undefined && a.id!=="").map(a=>({
       id:String(a.id), contractorId:String(a.contractorId), oblId:String(a.oblId||""),
       fecha:d10(a.fecha), lugar:a.lugar||"", descRaw:a.descRaw||"", descAI:a.descAI||"",
-      resultados:a.resultados||"", impacto:a.impacto||"",
+      resultados:a.resultados||"", impacto:a.impacto||"", soporte:a.soporte||"",
       fotos:[a.foto1,a.foto2].filter(x=>x && String(x).trim())
     }));
     pendientes.forEach(p=>{ if(!DB.activities.some(x=>x.id===p.id)) DB.activities.push(p); });
@@ -677,7 +700,7 @@ function toggleSide(open){ $("#side").classList.toggle("open",open); $("#backdro
 /* ====================== ROUTER ====================== */
 const TITLES={
   inicio:["Inicio","Tu resumen del período actual"],
-  registrar:["Registrar actividad","La IA mejora tu redacción automáticamente"],
+  registrar:["Registrar actividad","Describe la actividad y adjunta el soporte"],
   historial:["Historial de actividades","Todo lo que has registrado"],
   obligaciones:["Mis obligaciones","Estado de cumplimiento por obligación"],
   informe:["Generar informe","Tu informe en Word con un clic"],
@@ -746,6 +769,12 @@ let REG_PHOTOS=[];
 function vRegistrar(){
   const c=me();
   REG_PHOTOS=[];
+  const oblsActivas=c.obligaciones.filter(o=>o.activa);
+  if(!oblsActivas.length){
+    $("#view").innerHTML=`<div class="empty"><span class="material-symbols-rounded">checklist</span>
+      No tienes obligaciones activas asignadas. Contacta al supervisor para que registre al menos una obligación antes de crear actividades.</div>`;
+    return;
+  }
   $("#view").innerHTML=`
     <div class="grid g-2">
       <div class="card">
@@ -753,13 +782,15 @@ function vRegistrar(){
         <div class="form-grid">
           <div class="f"><label>Fecha</label><input class="input" type="date" id="rFecha" value="${todayISO()}"></div>
           <div class="f"><label>Lugar</label><input class="input" id="rLugar" placeholder="Ej: IE Técnico Industrial"></div>
-          <div class="f full"><label>Obligación contractual</label>
-            <select class="input" id="rObl">${c.obligaciones.filter(o=>o.activa).map(o=>`<option value="${o.id}">${shorten(o.texto,90)}</option>`).join("")}</select></div>
+          <div class="f full"><label>Obligación contractual <span class="muted tiny">(obligatoria)</span></label>
+            <select class="input" id="rObl">${oblsActivas.map(o=>`<option value="${o.id}">${shorten(o.texto,90)}</option>`).join("")}</select></div>
           <div class="f full"><label>Actividad realizada <span class="muted tiny">(escribe sencillo, la IA la mejora)</span></label>
             <textarea class="input" id="rDesc" placeholder="Ej: fui al colegio y hablé con los jóvenes sobre participación"></textarea>
             <button class="btn btn-ghost btn-sm mt-s" onclick="dictar('rDesc')"><span class="material-symbols-rounded">mic</span> Dictar por voz</button>
             <button class="btn btn-purple btn-sm mt-s" onclick="previewAI()"><span class="material-symbols-rounded">auto_awesome</span> Mejorar con IA</button>
           </div>
+          <div class="f full"><label>Soporte / ubicación del acta o planilla <span class="muted tiny">(si aplica)</span></label>
+            <textarea class="input" id="rSoporte" style="min-height:70px" placeholder="Ej: Acta N° 05 archivada en la carpeta física del Programa de Juventud / planilla firmada en Casa de la Juventud"></textarea></div>
           <div class="f full"><label>Fotografías <span class="muted tiny">(máximo 2, solo imágenes)</span></label>
             <div class="photos" id="rPhotos">
               <label class="photo-slot" id="slot0"><span class="material-symbols-rounded">add_a_photo</span><input type="file" accept="image/*" hidden onchange="addPhoto(this,0)"></label>
@@ -771,10 +802,8 @@ function vRegistrar(){
       </div>
       <div class="card">
         <div class="ai-tag"><span class="material-symbols-rounded">auto_awesome</span> Vista previa IA</div>
-        <p class="muted tiny mb">Así quedará tu redacción técnica. Puedes editarla.</p>
-        <div class="f"><label>Descripción técnica mejorada</label><textarea class="input" id="aiDesc" placeholder="Aparecerá aquí al pulsar «Mejorar con IA»"></textarea></div>
-        <div class="f mt-s"><label>Resultados obtenidos</label><textarea class="input" id="aiRes" style="min-height:70px"></textarea></div>
-        <div class="f mt-s"><label>Impacto generado</label><textarea class="input" id="aiImp" style="min-height:70px"></textarea></div>
+        <p class="muted tiny mb">Así quedará tu redacción técnica en el informe. Puedes editarla.</p>
+        <div class="f"><label>Descripción técnica mejorada</label><textarea class="input" id="aiDesc" style="min-height:220px" placeholder="Aparecerá aquí al pulsar «Mejorar con IA». Si no la usas, se genera automáticamente al guardar."></textarea></div>
       </div>
     </div>`;
 }
@@ -782,16 +811,16 @@ async function previewAI(){
   const raw=$("#rDesc").value, c=me(); const obl=c.obligaciones.find(o=>o.id===$("#rObl").value);
   if(!raw.trim()) return toast("Escribe primero la actividad","edit");
   toast("Mejorando con IA…","auto_awesome");
-  let desc,res,imp;
+  let desc;
   if(LIVE()){
     try{
       const r=await apiCall("ai_mejorar",{texto:raw,obligacion:obl.texto});
-      if(r && r.desc){ desc=r.desc; res=r.resultados; imp=r.impacto; }
+      if(r && r.desc){ desc=r.desc; }
       else throw new Error((r&&r.error)||"respuesta vacía de la IA");
     }
-    catch(e){ console.warn("ai_mejorar:",e); desc=aiMejorarTexto(raw,obl.texto);res=aiResultados(raw);imp=aiImpacto(raw); }
-  } else { desc=aiMejorarTexto(raw,obl.texto);res=aiResultados(raw);imp=aiImpacto(raw); }
-  $("#aiDesc").value=desc; $("#aiRes").value=res; $("#aiImp").value=imp;
+    catch(e){ console.warn("ai_mejorar:",e); desc=aiMejorarTexto(raw,obl.texto); }
+  } else { desc=aiMejorarTexto(raw,obl.texto); }
+  $("#aiDesc").value=desc;
 }
 function addPhoto(input,i){
   if(REG_PHOTOS.length>=2 && !REG_PHOTOS[i]){ input.value=""; return toast("Máximo 2 fotografías","info"); }
@@ -823,12 +852,14 @@ function dictar(id){
 async function guardarActividad(){
   const c=me();
   const fecha=$("#rFecha").value, lugar=$("#rLugar").value.trim(), oblId=$("#rObl").value, raw=$("#rDesc").value.trim();
+  const soporte=($("#rSoporte")?.value||"").trim();
   if(!fecha||!lugar||!raw) return toast("Completa fecha, lugar y actividad","edit");
+  if(!oblId) return toast("Toda actividad debe tener una obligación asociada","edit");   // mínimo 1 obligación
   const obl=c.obligaciones.find(o=>o.id===oblId);
   const descAI=$("#aiDesc").value.trim()||aiMejorarTexto(raw,obl.texto);
   const fotos=REG_PHOTOS.filter(Boolean);
   const act={ id:uid(),contractorId:c.id,oblId,fecha,lugar,descRaw:raw,descAI,
-    resultados:$("#aiRes").value.trim()||aiResultados(raw), impacto:$("#aiImp").value.trim()||aiImpacto(raw), fotos };
+    soporte, resultados:"", impacto:"", fotos };
   DB.activities.push(act);
   if(LIVE()){
     act._sinSync=true;
@@ -869,9 +900,9 @@ function vHistorial(){
 function renderHist(){
   const c=me(); const q=($("#hSearch")?.value||"").toLowerCase();
   let acts=DB.activities.filter(a=>a.contractorId===c.id);
-  if(q) acts=acts.filter(a=>(a.descRaw+a.descAI+a.lugar+oblText(c,a.oblId)).toLowerCase().includes(q));
+  if(q) acts=acts.filter(a=>(a.descRaw+a.descAI+a.lugar+(a.soporte||"")+oblText(c,a.oblId)).toLowerCase().includes(q));
   acts.sort((a,b)=>b.fecha.localeCompare(a.fecha));
-  const hl=s=> q? s.replace(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")})`,"gi"),'<span class="hl-mark">$1</span>'):s;
+  const hl=s=> q? String(s).replace(new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")})`,"gi"),'<span class="hl-mark">$1</span>'):s;
   $("#histList").innerHTML = acts.length? acts.map(a=>`
     <div class="card mb">
       <div class="row spread">
@@ -882,6 +913,7 @@ function renderHist(){
       </div>
       <p class="dim tiny mt-s" style="font-style:italic">"${hl(a.descRaw)}"</p>
       <p class="mt-s" style="font-size:13.5px">${hl(a.descAI)}</p>
+      ${a.soporte?`<p class="tiny muted mt-s"><span class="material-symbols-rounded" style="font-size:15px">attach_file</span> <b>Soporte:</b> ${hl(a.soporte)}</p>`:""}
       ${a.fotos.length?`<div class="photos">${a.fotos.map(f=>`<div class="photo-slot" style="cursor:default"><img src="${fotoSrc(f)}" loading="lazy" alt="Evidencia"></div>`).join("")}</div>`:""}
       <div class="row mt-s" style="gap:8px">
         ${a._sinSync?`<button class="btn btn-purple btn-sm" onclick="reintentarSync('${a.id}')"><span class="material-symbols-rounded">sync</span> Reintentar</button>`:""}
@@ -900,15 +932,14 @@ function editActividad(id){
   EDIT_FOTOS=(a.fotos||[]).slice();
   const opts=c.obligaciones.filter(o=>o.activa).map(o=>`<option value="${o.id}" ${o.id===a.oblId?"selected":""}>${shorten(o.texto,90)}</option>`).join("");
   openModal(`<span class="x material-symbols-rounded" onclick="closeModal()">close</span>
-    <h3>Editar actividad</h3><p class="muted tiny mb">Corrige tu redacción, cambia la obligación o quita una foto.</p>
+    <h3>Editar actividad</h3><p class="muted tiny mb">Corrige tu redacción, cambia la obligación, edita el soporte o quita una foto.</p>
     <div class="form-grid">
       <div class="f"><label>Fecha</label><input class="input" type="date" id="e_fecha" value="${a.fecha||""}"></div>
       <div class="f"><label>Lugar</label><input class="input" id="e_lugar" value="${String(a.lugar||"").replace(/"/g,"&quot;")}"></div>
-      <div class="f full"><label>Obligación</label><select class="input" id="e_obl">${opts}</select></div>
+      <div class="f full"><label>Obligación <span class="muted tiny">(obligatoria)</span></label><select class="input" id="e_obl">${opts}</select></div>
       <div class="f full"><label>Lo que escribiste</label><textarea class="input" id="e_raw">${a.descRaw||""}</textarea></div>
       <div class="f full"><label>Descripción para el informe</label><textarea class="input" id="e_ai" style="min-height:90px">${a.descAI||""}</textarea></div>
-      <div class="f full"><label>Resultados obtenidos</label><textarea class="input" id="e_res">${a.resultados||""}</textarea></div>
-      <div class="f full"><label>Impacto generado</label><textarea class="input" id="e_imp">${a.impacto||""}</textarea></div>
+      <div class="f full"><label>Soporte / ubicación del acta o planilla (si aplica)</label><textarea class="input" id="e_soporte" style="min-height:70px">${a.soporte||""}</textarea></div>
     </div>
     <div class="mt-s" id="e_fotosWrap" style="${EDIT_FOTOS.length?"":"display:none"}">
       <label class="tiny dim">Fotografías</label><div class="photos" id="e_fotos"></div></div>
@@ -925,9 +956,11 @@ function quitarFotoEdit(i){ EDIT_FOTOS.splice(i,1); renderEditFotos(); toast("Fo
 async function guardarEdicion(id){
   const a=DB.activities.find(x=>x.id===id); if(!a) return;
   const v=k=>$("#e_"+k)?.value;
-  const prev={fecha:a.fecha,lugar:a.lugar,oblId:a.oblId,descRaw:a.descRaw,descAI:a.descAI,resultados:a.resultados,impacto:a.impacto,fotos:a.fotos};
+  if(!(v("obl")||a.oblId)) return toast("Toda actividad debe tener una obligación asociada","edit");
+  const prev={fecha:a.fecha,lugar:a.lugar,oblId:a.oblId,descRaw:a.descRaw,descAI:a.descAI,soporte:a.soporte,fotos:a.fotos};
   a.fecha=v("fecha")||a.fecha; a.lugar=(v("lugar")||"").trim(); a.oblId=v("obl")||a.oblId;
-  a.descRaw=v("raw")||""; a.descAI=v("ai")||""; a.resultados=v("res")||""; a.impacto=v("imp")||"";
+  a.descRaw=v("raw")||""; a.descAI=v("ai")||""; a.soporte=(v("soporte")||"").trim();
+  a.resultados=""; a.impacto="";
   a.fotos=EDIT_FOTOS.slice();
   if(LIVE()){
     try{ const r=await apiCall("editar_actividad",{actividad:a}); if(r&&r.error) throw new Error(r.error); delete a._sinSync; toast("Actividad actualizada ✓"); }
@@ -998,9 +1031,9 @@ function vInforme(){
         <div class="f"><label>Número de planilla de aportes</label><input class="input" id="iPlanilla" placeholder="Se diligencia antes de descargar"></div>
       </div>
       <div class="mt-s tiny dim" id="iConteo"></div>
-      <button class="btn btn-purple mt" onclick="revisarInforme()"><span class="material-symbols-rounded">fact_check</span> Revisar con IA antes de generar</button>
-    </div>
-    <div id="iRevision"></div>`;
+      <button class="btn btn-cta btn-block mt" id="btnGenerar" onclick="generarWord($('#iPeriodo').value)"><span class="material-symbols-rounded">download</span> Generar informe en Word</button>
+      <p class="muted tiny mt-s" style="text-align:center">En modo vivo el backend genera un .docx nativo con las fotos incrustadas. Si no hay conexión, se descarga una versión local que también incluye las fotos.</p>
+    </div>`;
   mostrarActsPeriodo();
 }
 /* Muestra cuántas actividades entrarán al informe según el período elegido,
@@ -1012,23 +1045,6 @@ function mostrarActsPeriodo(){
   let msg=`Este período incluye <b>${acts.length}</b> actividad(es).`;
   if(pend) msg+=` <span style="color:var(--warn)">⚠ ${pend} sin sincronizar: ve al Historial y pulsa «Reintentar» antes de generar, o no saldrán en el informe.</span>`;
   const el=$("#iConteo"); if(el) el.innerHTML=msg;
-}
-function revisarInforme(){
-  const c=me(); const per=periodosDisponibles(c.corte)[+$("#iPeriodo").value]; const an=aiAnalizar(c,per);
-  const checks=[
-    ["Ortografía y redacción","ok","Textos revisados y redactados en lenguaje técnico institucional."],
-    ["Coherencia actividad–obligación","ok","Cada actividad está asociada a una obligación contractual."],
-    ["Tiempo verbal","ok","Redacción uniforme en tiempo pasado impersonal."],
-    [an.totalFotos>0?"Evidencia fotográfica":"Evidencia fotográfica", an.totalFotos>0?"ok":"warn", an.totalFotos>0?`${an.totalFotos} fotografías incluidas.`:"Algunas actividades no tienen fotos."],
-    [an.alertas.some(a=>a.nivel==='bad')?"Obligaciones sin soporte":"Cobertura de obligaciones", an.alertas.some(a=>a.nivel==='bad')?"bad":"ok", an.alertas.some(a=>a.nivel==='bad')?"Hay obligaciones sin actividades en el período.":"Todas las obligaciones tienen soporte."]
-  ];
-  $("#iRevision").innerHTML=`
-    <div class="ai-box mb">
-      <div class="ai-tag"><span class="material-symbols-rounded">verified</span> Revisión inteligente del informe</div>
-      <div class="alert-list">${checks.map(([t,n,d])=>`<div class="alert"><span class="dot ${n}"></span><div><b>${t}</b><br><span class="muted tiny">${d}</span></div></div>`).join("")}</div>
-    </div>
-    <button class="btn btn-cta btn-block" onclick="generarWord(${$("#iPeriodo").value})"><span class="material-symbols-rounded">download</span> Generar informe en Word</button>
-    <p class="muted tiny mt-s" style="text-align:center">En modo vivo el backend genera un .docx nativo con Google Docs. En demo se descarga un archivo Word editable.</p>`;
 }
 async function generarWord(pi){
   const c=me(); const per=periodosDisponibles(c.corte)[pi||0];
@@ -1043,33 +1059,43 @@ async function generarWord(pi){
       else { console.error("generar_informe: respuesta inesperada",r); toast("Respuesta inesperada del servidor; versión local.","info"); }
     }catch(e){ console.error("generar_informe:",e); toast("Sin conexión al servidor; versión local.","info"); }
   }
-  const html=buildInformeHTML(c,per,planilla,entrega);
+  toast("Preparando fotos del informe…","image");
+  const html=await buildInformeHTML(c,per,planilla,entrega);
   const blob=new Blob(['\ufeff'+html],{type:"application/msword"});
   const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
   a.download=`Informe_${c.contrato}_${per.start}.doc`; a.click();
   toast("Informe descargado ✓ Ábrelo en Word");
 }
-function fotoCelda(f){
-  // Word (en .doc local) no muestra fotos de Drive ni base64; mostramos una casilla limpia.
-  // Las fotos reales sí salen incrustadas en el .docx que genera el servidor.
-  return `<div style="width:175px;min-height:120px;border:1px dashed #b9a6f5;border-radius:8px;display:inline-block;text-align:center;color:#6C3BFF;font-family:Arial;font-size:9pt;padding:42px 6px;margin:3px;background:#f6f3ff">📷<br>Evidencia fotográfica<br><span style="color:#8a7fb5;font-size:8pt">(incrustada en el informe del servidor)</span></div>`;
+/* Etiqueta <img> para el informe local: usa base64 si se pudo convertir; si no,
+   cae a la miniatura de Drive (mejor esfuerzo). */
+function fotoImgTag(b64, orig){
+  const src = b64 || fotoSrc(orig);
+  if(!src) return "";
+  return `<img src="${src}" style="width:175px;max-width:175px;border:1px solid #ccc;border-radius:6px;margin:3px" alt="Evidencia fotográfica"/>`;
 }
-function buildInformeHTML(c,per,planilla,entrega){
+/* Construye el HTML del informe local. Es ASÍNCRONO porque primero convierte
+   cada foto a base64 para que quede INCRUSTADA dentro del propio .doc y se vea
+   aunque no haya conexión. */
+async function buildInformeHTML(c,per,planilla,entrega){
   const acts=DB.activities.filter(a=>a.contractorId===c.id && enPeriodo(a.fecha,per));
+  // Precargar base64 de todas las fotos del período
+  for(const a of acts){
+    a._fotosB64=[];
+    for(const f of (a.fotos||[])){ a._fotosB64.push(await fotoBase64(f)); }
+  }
   const oblsConActs=c.obligaciones.filter(o=>o.activa);
   let desarrollo="";
   oblsConActs.forEach((o,i)=>{
     const list=acts.filter(a=>a.oblId===o.id); if(!list.length) return;
     desarrollo+=`<h3 style="color:#073763;font-family:Arial">OBLIGACIÓN ${i+1}. ${o.texto}</h3>`;
     list.forEach(a=>{
+      const fotosHTML=(a.fotos||[]).map((f,idx)=>fotoImgTag(a._fotosB64[idx], f)).join("");
       desarrollo+=`<table width="100%" style="border-collapse:collapse;margin:8px 0"><tr>
         <td width="${a.fotos.length?'62%':'100%'}" valign="top" style="padding:6px;font-family:Arial;font-size:11pt">
           <b>Fecha:</b> ${fmtDate(a.fecha)} &nbsp;|&nbsp; <b>Lugar:</b> ${a.lugar}<br><br>
-          <b>Descripción:</b> ${a.descAI}<br><br>
-          <b>Resultados obtenidos:</b> ${a.resultados}<br><br>
-          <b>Impacto generado:</b> ${a.impacto}
+          <b>Descripción:</b> ${a.descAI}${a.soporte?`<br><br><b>Soporte:</b> ${a.soporte}`:""}
         </td>
-        ${a.fotos.length?`<td width="38%" valign="top" style="padding:6px">${a.fotos.map(f=>fotoCelda(f)).join("")}</td>`:""}
+        ${a.fotos.length?`<td width="38%" valign="top" style="padding:6px">${fotosHTML}</td>`:""}
       </tr></table><hr style="border:none;border-top:1px solid #ddd">`;
     });
   });
