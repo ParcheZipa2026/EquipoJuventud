@@ -376,14 +376,25 @@ function comprimirFoto(dataUrl){
   });
 }
 /* Convierte una foto (URL de Drive o base64) a base64 para incrustarla en el
-   informe local. Si es de Drive, la carga por canvas con CORS; si falla,
-   devuelve "" y el informe usa la miniatura como respaldo. */
-function fotoBase64(f){
+   informe local. El navegador NO puede leer las imágenes de Drive por CORS,
+   así que se le piden al backend; el canvas queda solo como último recurso. */
+async function fotoBase64(f){
+  if(!f) return "";
+  const s=String(f);
+  if(s.startsWith("data:")) return s;                 // ya es base64
+  if(LIVE()){
+    try{
+      const r=await apiCall("foto_b64",{url:s});
+      if(r && r.data) return r.data;
+    }catch(e){ console.warn("foto_b64:",e); }
+  }
+  return await fotoBase64Canvas(s);
+}
+/* Último recurso: intentar leerla desde el navegador. Suele fallar por CORS. */
+function fotoBase64Canvas(f){
   return new Promise(res=>{
-    if(!f) return res("");
-    const s=String(f);
-    if(s.startsWith("data:")) return res(s);          // ya es base64
     const src=fotoSrc(f);
+    if(!src) return res("");
     const img=new Image();
     img.crossOrigin="anonymous";
     img.onload=()=>{
@@ -1066,12 +1077,14 @@ async function generarWord(pi){
   a.download=`Informe_${c.contrato}_${per.start}.doc`; a.click();
   toast("Informe descargado ✓ Ábrelo en Word");
 }
-/* Etiqueta <img> para el informe local: usa base64 si se pudo convertir; si no,
-   cae a la miniatura de Drive (mejor esfuerzo). */
-function fotoImgTag(b64, orig){
-  const src = b64 || fotoSrc(orig);
-  if(!src) return "";
-  return `<img src="${src}" style="width:175px;max-width:175px;border:1px solid #ccc;border-radius:6px;margin:3px" alt="Evidencia fotográfica"/>`;
+/* Etiqueta <img> para el informe local. SOLO se usa base64: una URL de Drive
+   dentro de un .doc se ve como un cuadro con X roja porque Word no puede
+   descargarla. Si no se pudo obtener el base64, se deja un recuadro limpio. */
+function fotoImgTag(b64){
+  if(b64 && String(b64).startsWith("data:")){
+    return `<img src="${b64}" style="width:175px;max-width:175px;border:1px solid #ccc;border-radius:6px;margin:3px" alt="Evidencia fotográfica"/>`;
+  }
+  return `<div style="width:175px;height:120px;border:1px dashed #b9a6f5;border-radius:8px;display:inline-block;text-align:center;color:#6C3BFF;font-family:Arial;font-size:9pt;padding-top:46px;margin:3px;background:#f6f3ff">Evidencia fotográfica<br><span style="color:#8a7fb5;font-size:8pt">(no disponible sin conexión)</span></div>`;
 }
 /* Construye el HTML del informe local. Es ASÍNCRONO porque primero convierte
    cada foto a base64 para que quede INCRUSTADA dentro del propio .doc y se vea
@@ -1089,7 +1102,7 @@ async function buildInformeHTML(c,per,planilla,entrega){
     const list=acts.filter(a=>a.oblId===o.id); if(!list.length) return;
     desarrollo+=`<h3 style="color:#073763;font-family:Arial">OBLIGACIÓN ${i+1}. ${o.texto}</h3>`;
     list.forEach(a=>{
-      const fotosHTML=(a.fotos||[]).map((f,idx)=>fotoImgTag(a._fotosB64[idx], f)).join("");
+      const fotosHTML=(a.fotos||[]).map((f,idx)=>fotoImgTag(a._fotosB64[idx])).join("");
       desarrollo+=`<table width="100%" style="border-collapse:collapse;margin:8px 0"><tr>
         <td width="${a.fotos.length?'62%':'100%'}" valign="top" style="padding:6px;font-family:Arial;font-size:11pt">
           <b>Fecha:</b> ${fmtDate(a.fecha)} &nbsp;|&nbsp; <b>Lugar:</b> ${a.lugar}<br><br>
