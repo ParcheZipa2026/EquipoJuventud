@@ -356,7 +356,25 @@ function fotoSrc(f){
   const s=String(f);
   if(s.startsWith("data:")) return s;                 // foto local aún sin subir
   const m=s.match(/[-\w]{25,}/);                      // extraer ID del archivo de Drive
-  return m ? "https://drive.google.com/thumbnail?id="+m[0]+"&sz=w400" : s;
+  return m ? "https://lh3.googleusercontent.com/d/"+m[0]+"=w600" : s;
+}
+// Devuelve la etiqueta <img> con respaldo: si lh3 falla, prueba /thumbnail; si no, ícono.
+function imgFoto(f){
+  const s=String(f||"");
+  if(s.startsWith("data:")) return `<img src="${s}" loading="lazy" alt="Evidencia">`;
+  const m=s.match(/[-\w]{25,}/); const id=m?m[0]:"";
+  return `<img src="${fotoSrc(f)}" data-fid="${id}" data-step="0" onerror="fotoOnErr(this)" loading="lazy" alt="Evidencia">`;
+}
+function fotoOnErr(img){
+  const id=img.getAttribute("data-fid")||"";
+  if(id && img.getAttribute("data-step")==="0"){
+    img.setAttribute("data-step","1");
+    img.src="https://drive.google.com/thumbnail?id="+id+"&sz=w600";
+    return;
+  }
+  img.onerror=null;
+  const slot=img.closest(".photo-slot");
+  if(slot) slot.innerHTML='<span class="material-symbols-rounded" style="color:var(--ink-soft)">image_not_supported</span>';
 }
 /* Comprime la foto en el navegador ANTES de enviarla al servidor.
    Una foto de celular (5–10 MB) baja a ~150–300 KB: guardado mucho más
@@ -925,7 +943,7 @@ function renderHist(){
       <p class="dim tiny mt-s" style="font-style:italic">"${hl(a.descRaw)}"</p>
       <p class="mt-s" style="font-size:13.5px">${hl(a.descAI)}</p>
       ${a.soporte?`<p class="tiny muted mt-s"><span class="material-symbols-rounded" style="font-size:15px">attach_file</span> <b>Soporte:</b> ${hl(a.soporte)}</p>`:""}
-      ${a.fotos.length?`<div class="photos">${a.fotos.map(f=>`<div class="photo-slot" style="cursor:default"><img src="${fotoSrc(f)}" loading="lazy" alt="Evidencia"></div>`).join("")}</div>`:""}
+      ${a.fotos.length?`<div class="photos">${a.fotos.map(f=>`<div class="photo-slot" style="cursor:default">${imgFoto(f)}</div>`).join("")}</div>`:""}
       <div class="row mt-s" style="gap:8px">
         ${a._sinSync?`<button class="btn btn-purple btn-sm" onclick="reintentarSync('${a.id}')"><span class="material-symbols-rounded">sync</span> Reintentar</button>`:""}
         <button class="btn btn-ghost btn-sm" onclick="editActividad('${a.id}')"><span class="material-symbols-rounded">edit</span> Editar</button>
@@ -961,7 +979,7 @@ function editActividad(id){
 function renderEditFotos(){
   const cont=$("#e_fotos"); if(!cont) return;
   $("#e_fotosWrap").style.display = EDIT_FOTOS.length? "block":"none";
-  cont.innerHTML = EDIT_FOTOS.map((f,i)=>`<div class="photo-slot" style="cursor:default"><img src="${fotoSrc(f)}" loading="lazy"><span class="rm material-symbols-rounded" onclick="quitarFotoEdit(${i})">close</span></div>`).join("");
+  cont.innerHTML = EDIT_FOTOS.map((f,i)=>`<div class="photo-slot" style="cursor:default">${imgFoto(f)}<span class="rm material-symbols-rounded" onclick="quitarFotoEdit(${i})">close</span></div>`).join("");
 }
 function quitarFotoEdit(i){ EDIT_FOTOS.splice(i,1); renderEditFotos(); toast("Foto quitada (recuerda Guardar cambios)"); }
 async function guardarEdicion(id){
