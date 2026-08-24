@@ -961,7 +961,7 @@ function editActividad(id){
   EDIT_FOTOS=(a.fotos||[]).slice();
   const opts=c.obligaciones.filter(o=>o.activa).map(o=>`<option value="${o.id}" ${o.id===a.oblId?"selected":""}>${shorten(o.texto,90)}</option>`).join("");
   openModal(`<span class="x material-symbols-rounded" onclick="closeModal()">close</span>
-    <h3>Editar actividad</h3><p class="muted tiny mb">Corrige tu redacción, cambia la obligación, edita el soporte o quita una foto.</p>
+    <h3>Editar actividad</h3><p class="muted tiny mb">Corrige tu redacción, cambia la obligación, edita el soporte o agrega/quita una foto.</p>
     <div class="form-grid">
       <div class="f"><label>Fecha</label><input class="input" type="date" id="e_fecha" value="${a.fecha||""}"></div>
       <div class="f"><label>Lugar</label><input class="input" id="e_lugar" value="${String(a.lugar||"").replace(/"/g,"&quot;")}"></div>
@@ -970,16 +970,37 @@ function editActividad(id){
       <div class="f full"><label>Descripción para el informe</label><textarea class="input" id="e_ai" style="min-height:90px">${a.descAI||""}</textarea></div>
       <div class="f full"><label>Soporte / ubicación del acta o planilla (si aplica)</label><textarea class="input" id="e_soporte" style="min-height:70px">${a.soporte||""}</textarea></div>
     </div>
-    <div class="mt-s" id="e_fotosWrap" style="${EDIT_FOTOS.length?"":"display:none"}">
-      <label class="tiny dim">Fotografías</label><div class="photos" id="e_fotos"></div></div>
+    <div class="mt-s">
+      <label class="tiny dim">Fotografías <span class="muted">(máximo 2)</span></label>
+      <div class="photos" id="e_fotos"></div></div>
     <div class="row mt"><button class="btn btn-ghost btn-sm" onclick="closeModal()">Cancelar</button>
       <button class="btn btn-purple btn-sm" onclick="guardarEdicion('${id}')"><span class="material-symbols-rounded">save</span> Guardar cambios</button></div>`);
   renderEditFotos();
 }
 function renderEditFotos(){
   const cont=$("#e_fotos"); if(!cont) return;
-  $("#e_fotosWrap").style.display = EDIT_FOTOS.length? "block":"none";
-  cont.innerHTML = EDIT_FOTOS.map((f,i)=>`<div class="photo-slot" style="cursor:default">${imgFoto(f)}<span class="rm material-symbols-rounded" onclick="quitarFotoEdit(${i})">close</span></div>`).join("");
+  // Fotos ya cargadas (con botón para quitarlas)
+  let html = EDIT_FOTOS.map((f,i)=>`<div class="photo-slot" style="cursor:default">${imgFoto(f)}<span class="rm material-symbols-rounded" onclick="quitarFotoEdit(${i})">close</span></div>`).join("");
+  // Ranura para AGREGAR foto (solo si aún caben, máximo 2)
+  if(EDIT_FOTOS.filter(Boolean).length < 2){
+    html += `<label class="photo-slot"><span class="material-symbols-rounded">add_a_photo</span>
+      <input type="file" accept="image/*" hidden onchange="addFotoEdit(this)"></label>`;
+  }
+  cont.innerHTML = html;
+}
+// Agregar una foto nueva en el modal de edición (comprime antes de guardar).
+function addFotoEdit(input){
+  const f=input.files[0]; if(!f) return;
+  if(!f.type.startsWith("image/")){ input.value=""; return toast("Solo se permiten imágenes","block"); }
+  if(EDIT_FOTOS.filter(Boolean).length>=2){ input.value=""; return toast("Máximo 2 fotografías","info"); }
+  const rd=new FileReader();
+  rd.onload=async ()=>{
+    const comp=await comprimirFoto(rd.result);   // baja el peso antes de subir
+    EDIT_FOTOS.push(comp);
+    renderEditFotos();
+    toast("Foto agregada (recuerda Guardar cambios)");
+  };
+  rd.readAsDataURL(f);
 }
 function quitarFotoEdit(i){ EDIT_FOTOS.splice(i,1); renderEditFotos(); toast("Foto quitada (recuerda Guardar cambios)"); }
 async function guardarEdicion(id){
