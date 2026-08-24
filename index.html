@@ -1014,7 +1014,7 @@ async function guardarEdicion(id){
   a.fotos=EDIT_FOTOS.slice();
   if(LIVE()){
     try{ const r=await apiCall("editar_actividad",{actividad:a}); if(r&&r.error) throw new Error(r.error); delete a._sinSync; toast("Actividad actualizada ✓"); }
-    catch(e){ console.error("editar_actividad:",e); Object.assign(a,prev); return toast("⚠ No se pudo guardar el cambio en el servidor.","error"); }
+    catch(e){ console.error("editar_actividad:",e); Object.assign(a,prev); return toast("⚠ Servidor: "+(e && e.message ? e.message : e),"error"); }
   } else toast("Actividad actualizada ✓");
   closeModal(); renderHist();
 }
